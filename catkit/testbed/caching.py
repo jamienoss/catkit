@@ -217,9 +217,12 @@ class DeviceCache(UserCache):
 class DeviceCacheEnum(Enum):
     """ Enum API to DeviceCache. """
 
-    def __init__(self, description, config_id):
+    def __init__(self, description, config_id, comms_group=None):
         self.description = description
         self.config_id = config_id
+        self.comms_group = comms_group
+
+        # Must be last, it signals that __init__() returned.
         self.__object_exists = True
 
     @classmethod
@@ -229,20 +232,56 @@ class DeviceCacheEnum(Enum):
             if value == item.config_id:
                 return item
 
-    def __getattr__(self, item):
+    @classmethod
+    def set_cache(cls, cache):
+        """ Call this to set the cache by dynamically overriding get_cache(). """
+        def get_cache(self):
+            nonlocal cache
+            if isinstance(cache, DeviceCommsManager):
+                return cache.comms[self.comms_group]
+            else:
+                return cache
+        # Override get_cache() with the one above.
+        setattr(cls, "get_cache", get_cache)
+
+    def get_cache(self):
         global devices
-        """ Allow DeviceCacheEnum.member.attribute -> catkit.testbed.devices[member].attribute """
+        return devices
+
+    def __getattr__(self, item):
+        """ Allow DeviceCacheEnum.member.attribute to poke through to self.get_cache()[member].attribute """
+
+        comms_group = object.__getattribute__(self, "comms_group")
         config_id = object.__getattribute__(self, "config_id")
         member = self.__class__(config_id)
-        device = devices[member]
-        return device.__getattribute__(item)
+
+        if comms_group is None:
+            # NO multiprocessing: cache lives on same process as caller.
+            device = object.__getattribute__(self, "get_cache")()[member]
+            return device.__getattribute__(item)
+        else:
+            # multiprocessing: cache lives on different process than caller.
+            device_coms = object.__getattribute__(self, "get_cache")()
+            timeout = device_coms.timeout
+            with device_coms.acquire_lock(timeout=timeout):
+                # Is item an attribute or a method?
+                if device_coms.is_callable(member, item):
+                    print(item, " IS callable")
+                    container = DeferredFunc(member, item, device_coms) # Acquires lock.
+                    return container.wrapper # This will release lock when called.
+                else:
+                    print(item, " is NOT callable")
+                    # send and get attribute value.
+                    return device_coms.get(member, "__getattribute__", item)
 
     def __setattr__(self, name, value):
         if "_DeviceCacheEnum__object_exists" in self.__dict__:
-            config_id = object.__getattribute__(self, "config_id")
-            member = self.__class__(config_id)
-            device = devices[member]
-            device.__setattr__(name, value)
+            member = self.__class__(self.config_id)
+            if self.comms_group is None:
+                device = self.get_cache()[member]
+                device.__setattr__(name, value)
+            else:
+                self.get_cache().get(member, "__setattr__", name, value)
         else:
             object.__setattr__(self, name, value)
 
