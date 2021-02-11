@@ -88,7 +88,6 @@ class PyvisaNpointEmulator:
             # Construct response message ready for it to be returned upon read.
             return_value = struct.pack(endian + parameter.data_type_fmt, self.value_store[channel][parameter])
             self.response_message.append(b''.join([command.value, address, return_value, NPointLC400.endpoint]))
-            print("self.response_message", self.response_message)
         else:
             raise NotImplementedError(f'Non implemented command ({command}) found in message.')
 
