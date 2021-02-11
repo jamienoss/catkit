@@ -128,6 +128,7 @@ def test_DeviceCache():
         assert device_c.instrument
 
 
+@pytest.mark.filterwarnings("ignore:npoint_tiptilt_lc_400 failed to close correctly.")
 def test_mutable_enum():
     class Dev(catkit.testbed.DeviceCacheEnum):
         NPOINT_C = ("npoint a for test", "dummy_config_id")
