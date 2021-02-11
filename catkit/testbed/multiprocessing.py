@@ -1,8 +1,7 @@
 from collections import namedtuple
 from contextlib import contextmanager
+from enum import Enum
 from multiprocessing import Pipe, Manager
-
-from catkit.testbed import devices
 
 
 Request = namedtuple("Request", ["member", "func", "args", "kwargs"])
@@ -43,8 +42,7 @@ class DeviceServer(DeviceComms):
         return is_alive
 
     def get_cache(self):
-        global devices
-        return devices
+        pass
 
     def is_callable(self, member, item):
         return callable(self.get_cache()[member].__getattribute__(item))
