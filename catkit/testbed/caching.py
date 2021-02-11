@@ -4,7 +4,7 @@ from enum import Enum
 import warnings
 
 from catkit.interfaces.Instrument import Instrument
-from catkit.testbed.multiprocessing import DeviceCommsManager
+from catkit.testbed.multiprocessing import DeferredFunc, DeviceCommsManager
 
 
 class UserCache(UserDict, ABC):
@@ -239,7 +239,7 @@ class DeviceCacheEnum(Enum):
         def get_cache(self):
             nonlocal cache
             if isinstance(cache, DeviceCommsManager):
-                return cache.comms[self.comms_group]
+                return cache[self.comms_group]
             else:
                 return cache
         # Override get_cache() with the one above.
@@ -262,14 +262,14 @@ class DeviceCacheEnum(Enum):
             return device.__getattribute__(item)
         else:
             # multiprocessing: cache lives on different process than caller.
-            device_coms = object.__getattribute__(self, "get_cache")()
+            device_coms = object.__getattribute__(self, "get_cache")()[comms_group]
             timeout = device_coms.timeout
             with device_coms.acquire_lock(timeout=timeout):
                 # Is item an attribute or a method?
                 if device_coms.is_callable(member, item):
                     print(item, " IS callable")
                     container = DeferredFunc(member, item, device_coms) # Acquires lock.
-                    return container.wrapper # This will release lock when called.
+                    return container.wrapper  # This will release lock when called.
                 else:
                     print(item, " is NOT callable")
                     # send and get attribute value.

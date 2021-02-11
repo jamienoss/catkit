@@ -12,6 +12,23 @@ class CommsGroup(Enum):
     SERVER = 2
 
 
+class DeferredFunc:
+    def __init__(self, member, func_name, comms):
+        self.member = member
+        self.func_name = func_name
+        self.comms = comms
+        # Lock here such that it remains locked during the interim of wrapper being returned and it being called.
+        if not self.comms.lock.acquire(self.comms.timeout):  # Released in self.wrapper()
+            raise RuntimeError(f"Failed to acquire lock after {self.comms.timeout}s")
+
+    def wrapper(self, *args, **kwargs):
+        try:
+            resp = self.comms.get(self.member, self.func_name, *args, **kwargs)
+        finally:
+            self.comms.lock.release()  # Acquired in self.__init__()
+        return resp
+
+
 class DeviceComms:
     def __init__(self, connection, lock, *args, timeout=5*60, **kwargs):
         self.connection = connection
@@ -31,45 +48,64 @@ class DeviceComms:
 
 
 class DeviceServer(DeviceComms):
-    def __init__(self, *args, client_list=[], **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.client_list = client_list
+        self.client_list = []
 
     def are_clients_alive(self):
         is_alive = False
         for client in self.client_list:
-            is_alive |= client.is_alive()
+            is_alive = client.is_alive()
+            if not is_alive:
+                # Check exitcode and raise on error.
+                if client.exitcode != 0:
+                    raise RuntimeError(f"The client process '{client.name}' exited with exitcode '{client.exitcode}'")
+            is_alive |= is_alive
         return is_alive
 
-    def get_cache(self):
-        pass
+    @classmethod
+    def set_cache(cls, cache):
+        """ Call this to set the cache by dynamically overriding get_cache(). """
+        def get_cache(self):
+            nonlocal cache
+            if isinstance(cache, DeviceCommsManager):
+                return cache.comms[self.comms_group]
+            else:
+                return cache
+        # Override get_cache() with the one above.
+        setattr(cls, "get_cache", get_cache)
 
-    def is_callable(self, member, item):
+    def get_cache(self):
+        raise NotImplementedError("set_cache() must be called to first register the cache to be used. ")
+
+    def callable(self, member, item):
         return callable(self.get_cache()[member].__getattribute__(item))
 
-    def listen(self):
+    def listen(self, client_list):
+        self.client_list = client_list
+
         if not self.lock.acquire(self.timeout):
-            raise RuntimeError(f"Failed to acquire lock after {timeout}s")
+            raise RuntimeError(f"Failed to acquire lock after {self.timeout}s")
         try:
-            while self.are_clients_alive():
-                # spin until there's something to read.
-                while not self.connection.poll():
-                    pass
-                # Read.
-                resp = self.connection.recv()
-                # Type check.
-                if not isinstance(resp, Request):
-                    raise RuntimeError(f"Expected response type of '{Request}' but got '{type(resp)}'")
+            while self.are_clients_alive():  # Spin until there's something to read.
+                if self.connection.poll():
+                    # Read.
+                    resp = self.connection.recv()
 
-                if resp.member is None:
-                    # Call self.func()
-                    result = self.__getattribute__(resp.func)(*resp.args, **resp.kwargs)
-                else:
-                    # Call cache[member].func()
-                    result = self.get_cache()[resp.member].__getattribute__(resp.func)(*resp.args, **resp.kwargs)
+                    # Type check.
+                    if not isinstance(resp, Request):
+                        raise RuntimeError(f"Expected response type of '{Request}' but got '{type(resp)}'")
 
-                # Send the result back to the client (no post send hand shake).
-                self.connection.send(result)
+                    # Execute.
+                    if resp.member is None:
+                        # Call self.func()
+                        result = self.__getattribute__(resp.func)(*resp.args, **resp.kwargs)
+                    else:
+                        # Call cache[member].func()
+                        result = self.get_cache()[resp.member].__getattribute__(resp.func)(*resp.args, **resp.kwargs)
+
+                    # Send the result back to the client (no post send hand shake).
+                    self.connection.send(result)
         finally:
             self.lock.release()
         print("No more clients to listen to, terminating.")
@@ -78,7 +114,6 @@ class DeviceServer(DeviceComms):
 class DeviceClient(DeviceComms):
     def get(self, member, func, *args, **kwargs):
         with self.acquire_lock(timeout=self.timeout):
-            print("sending...")
             self.connection.send(Request(member=member, func=func, args=args, kwargs=kwargs))
             self.connection.poll(self.timeout)
             return self.connection.recv()
@@ -89,15 +124,21 @@ class DeviceClient(DeviceComms):
 
 class DeviceCommsManager:
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, timeout=2*60, **kwargs):
         self.manager = None
+        self.timeout = timeout
         self.comms = {group: None for group in CommsGroup}
 
     def __enter__(self, client_list=[]):
         self.manager = Manager().__enter__()
         client, server = Pipe(duplex=True)
-        self.comms[CommsGroup.CLIENT] = DeviceClient(connection=client, lock=self.manager.RLock())
-        self.comms[CommsGroup.SERVER] = DeviceServer(connection=server, lock=self.manager.RLock(), client_list=client_list)
+        self.comms[CommsGroup.CLIENT] = DeviceClient(connection=client,
+                                                     lock=self.manager.RLock(),
+                                                     timeout=self.timeout)
+        self.comms[CommsGroup.SERVER] = DeviceServer(connection=server,
+                                                     lock=self.manager.RLock(),
+                                                     client_list=client_list,
+                                                     timeout=self.timeout)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -105,20 +146,3 @@ class DeviceCommsManager:
             if comm:
                 comm.connection.close()
         self.manager.__exit__(None, None, None)
-
-
-class DeferredFunc:
-    def __init__(self, member, func_name, comms):
-        self.member = member
-        self.func_name = func_name
-        self.comms = comms
-        # Lock here such that it remains locked during the interim of wrapper being returned and it being called.
-        if not self.comms.lock.acquire(self.comms.timeout):  # Released in self.wrapper()
-            raise RuntimeError(f"Failed to acquire lock after {timeout}s")
-
-    def wrapper(self, *args, **kwargs):
-        try:
-            resp = self.comms.get(self.member, self.func, args, kwargs)
-        finally:
-            self.comms.lock.release() # Acquired in self.__init__()
-        return resp
