@@ -1,15 +1,11 @@
 from collections import namedtuple
 from contextlib import contextmanager
-from enum import Enum
 from multiprocessing import Pipe, Manager
-
+from multiprocessing.connection import Connection, Listener
+import os
+import socket
 
 Request = namedtuple("Request", ["member", "func", "args", "kwargs"])
-
-
-class CommsGroup(Enum):
-    CLIENT = 1
-    SERVER = 2
 
 
 class DeferredFunc:
@@ -29,11 +25,17 @@ class DeferredFunc:
         return resp
 
 
-class DeviceComms:
-    def __init__(self, connection, lock, *args, timeout=5*60, **kwargs):
-        self.connection = connection
+class DeviceServer(Listener):
+    def __init__(self, lock, client_list, *args, timeout=10, **kwargs):
+        super().__init__(*args, **kwargs)
         self.lock = lock
         self.timeout = timeout
+        self.client_list = client_list
+
+        # self.accept() doesn't accept a timeout (tut tut) so we have to set it lower down.
+        # Without this, if no client tries connects, self.accept() will block indefinitely waiting for a connection.
+        # This could happen if a client raises/exits before connecting.
+        self._listener._socket.settimeout(self.timeout)
 
     @contextmanager
     def acquire_lock(self, timeout=None, raise_on_fail=True):
@@ -45,12 +47,6 @@ class DeviceComms:
         finally:
             if locked:
                 self.lock.release()
-
-
-class DeviceServer(DeviceComms):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.client_list = []
 
     def are_clients_alive(self):
         is_alive = False
@@ -68,10 +64,7 @@ class DeviceServer(DeviceComms):
         """ Call this to set the cache by dynamically overriding get_cache(). """
         def get_cache(self):
             nonlocal cache
-            if isinstance(cache, DeviceCommsManager):
-                return cache.comms[self.comms_group]
-            else:
-                return cache
+            return cache
         # Override get_cache() with the one above.
         setattr(cls, "get_cache", get_cache)
 
@@ -81,37 +74,66 @@ class DeviceServer(DeviceComms):
     def callable(self, member, item):
         return callable(self.get_cache()[member].__getattribute__(item))
 
-    def listen(self, client_list):
-        self.client_list = client_list
+    def listen(self):
+        print("listening...")
 
-        if not self.lock.acquire(self.timeout):
-            raise RuntimeError(f"Failed to acquire lock after {self.timeout}s")
-        try:
-            while self.are_clients_alive():  # Spin until there's something to read.
-                if self.connection.poll():
-                    # Read.
-                    resp = self.connection.recv()
+        with self.accept() as connection:
+            print("connection accepted")
+            try:
+                if not self.lock.acquire(self.timeout):
+                    raise RuntimeError(f"Failed to acquire lock after {self.timeout}s")
+                while self.are_clients_alive():  # Spin until there's something to read.
+                    if connection.poll():
+                        # Read.
+                        try:
+                            resp = connection.recv()
+                        except EOFError:
+                            break
 
-                    # Type check.
-                    if not isinstance(resp, Request):
-                        raise RuntimeError(f"Expected response type of '{Request}' but got '{type(resp)}'")
+                        # Type check.
+                        if not isinstance(resp, Request):
+                            raise RuntimeError(f"Expected response type of '{Request}' but got '{type(resp)}'")
 
-                    # Execute.
-                    if resp.member is None:
-                        # Call self.func()
-                        result = self.__getattribute__(resp.func)(*resp.args, **resp.kwargs)
-                    else:
-                        # Call cache[member].func()
-                        result = self.get_cache()[resp.member].__getattribute__(resp.func)(*resp.args, **resp.kwargs)
+                        # Execute.
+                        if resp.member is None:
+                            # Call self.func()
+                            result = self.__getattribute__(resp.func)(*resp.args, **resp.kwargs)
+                        else:
+                            # Call cache[member].func()
+                            result = self.get_cache()[resp.member].__getattribute__(resp.func)(*resp.args, **resp.kwargs)
 
-                    # Send the result back to the client (no post send hand shake).
-                    self.connection.send(result)
-        finally:
-            self.lock.release()
+                        # Send the result back to the client (no post send hand shake).
+                        connection.send(result)
+            finally:
+                self.lock.release()
         print("No more clients to listen to, terminating.")
 
 
-class DeviceClient(DeviceComms):
+class DeviceClient:
+    def __init__(self, address, lock, *args, timeout=10, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.address = address
+        self.lock = lock
+        self.timeout = timeout
+
+    @contextmanager
+    def acquire_lock(self, timeout=None, raise_on_fail=True):
+        locked = self.lock.acquire(timeout)
+        if raise_on_fail and not locked:
+            raise RuntimeError(f"Failed to acquire lock after {timeout}s")
+        try:
+            yield locked
+        finally:
+            if locked:
+                self.lock.release()
+
+    def __enter__(self):
+        self.connection = Client(address=self.address, authkey=None)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
     def get(self, member, func, *args, **kwargs):
         with self.acquire_lock(timeout=self.timeout):
             self.connection.send(Request(member=member, func=func, args=args, kwargs=kwargs))
@@ -122,27 +144,67 @@ class DeviceClient(DeviceComms):
         return self.get(None, "callable", member, item)
 
 
-class DeviceCommsManager:
+#
+# Stuff swiped from multiprocessing.connection
+#
 
-    def __init__(self, *args, timeout=2*60, **kwargs):
-        self.manager = None
-        self.timeout = timeout
-        self.comms = {group: None for group in CommsGroup}
+MESSAGE_LENGTH = 20
 
-    def __enter__(self, client_list=[]):
-        self.manager = Manager().__enter__()
-        client, server = Pipe(duplex=True)
-        self.comms[CommsGroup.CLIENT] = DeviceClient(connection=client,
-                                                     lock=self.manager.RLock(),
-                                                     timeout=self.timeout)
-        self.comms[CommsGroup.SERVER] = DeviceServer(connection=server,
-                                                     lock=self.manager.RLock(),
-                                                     client_list=client_list,
-                                                     timeout=self.timeout)
-        return self
+CHALLENGE = b'#CHALLENGE#'
+WELCOME = b'#WELCOME#'
+FAILURE = b'#FAILURE#'
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        for comm in self.comms.values():
-            if comm:
-                comm.connection.close()
-        self.manager.__exit__(None, None, None)
+
+def deliver_challenge(connection, authkey):
+    import hmac
+    if not isinstance(authkey, bytes):
+        raise ValueError(
+            "Authkey must be bytes, not {0!s}".format(type(authkey)))
+    message = os.urandom(MESSAGE_LENGTH)
+    connection.send_bytes(CHALLENGE + message)
+    digest = hmac.new(authkey, message, 'md5').digest()
+    response = connection.recv_bytes(256)        # reject large message
+    if response == digest:
+        connection.send_bytes(WELCOME)
+    else:
+        connection.send_bytes(FAILURE)
+        raise RuntimeError('Auth error: digest received was wrong')
+
+
+def answer_challenge(connection, authkey):
+    import hmac
+    if not isinstance(authkey, bytes):
+        raise ValueError(
+            "Authkey must be bytes, not {0!s}".format(type(authkey)))
+    message = connection.recv_bytes(256)         # reject large message
+    assert message[:len(CHALLENGE)] == CHALLENGE, 'message = %r' % message
+    message = message[len(CHALLENGE):]
+    digest = hmac.new(authkey, message, 'md5').digest()
+    connection.send_bytes(digest)
+    response = connection.recv_bytes(256)        # reject large message
+    if response != WELCOME:
+        raise RuntimeError('Auth error: digest sent was rejected')
+
+
+def SocketClient(address, family=socket.AF_INET):
+    if family != socket.AF_INET:
+        raise NotImplementedError
+    with socket.socket(family) as s:
+        s.setblocking(False)  # <------ original code blocked, this is the reason for copying this code.
+        s.connect(address)
+        c = Connection(s.detach())
+
+
+def Client(address, family=socket.AF_INET, authkey=None):
+    if family != socket.AF_INET:
+        raise NotImplementedError
+    c = SocketClient(address, family)
+
+    if authkey is not None and not isinstance(authkey, bytes):
+        raise TypeError('authkey should be a byte string')
+
+    if authkey is not None:
+        answer_challenge(c, authkey)
+        deliver_challenge(c, authkey)
+
+    return c
