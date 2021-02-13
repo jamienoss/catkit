@@ -23,14 +23,34 @@ def run_from_client(comms=None):
     time.sleep(2)  # Give time for parent start listening.
     Device.set_cache(comms)
     assert Device.NPOINT_C.instrument
-    for channel in Device.NPOINT_C.channels:
-        print(Device.NPOINT_C.get_status(channel))
+    print(Device.NPOINT_C.get_status(1))
 
-    Device.NPOINT_C.set(Parameters.P_GAIN, 1, 3.14)
-    assert Device.NPOINT_C.get(Parameters.P_GAIN, 1) == 3.14
+    for i in range(50):
+        with comms[CommsGroup.CLIENT].acquire_lock(10):
+            Device.NPOINT_C.set(Parameters.P_GAIN, 1, 3.14)
+            result = Device.NPOINT_C.get(Parameters.P_GAIN, 1)
+            print(result)
+            assert result == 3.14
 
-    for channel in Device.NPOINT_C.channels:
-        print(Device.NPOINT_C.get_status(channel))
+    print("client1 done")
+    time.sleep(10)
+
+
+def run_from_client2(comms=None):
+    print("Client running...")
+    time.sleep(2)  # Give time for parent start listening.
+    Device.set_cache(comms)
+    assert Device.NPOINT_C.instrument
+    print(Device.NPOINT_C.get_status(1))
+
+    for i in range(50):
+        with comms[CommsGroup.CLIENT].acquire_lock(10):
+            Device.NPOINT_C.set(Parameters.P_GAIN, 1, 1.42)
+            result = Device.NPOINT_C.get(Parameters.P_GAIN, 1)
+            print(result)
+            assert result == 1.42
+
+    print("client2 done")
 
 
 def test():
@@ -42,6 +62,7 @@ def test():
             client_process_list = []
             ctx = multiprocessing.get_context("spawn")
             client_process_list.append(ctx.Process(target=run_from_client, name="test_client", args=(manager.comms,)))
+            client_process_list.append(ctx.Process(target=run_from_client2, name="test_client2", args=(manager.comms,)))
 
             try:
                 # Start client. This sleeps to give listener time to begin.
@@ -62,6 +83,7 @@ def test():
                         # Race exists between is_alive() and here.
                         client.terminate()
                         client.join(30)
+                        print("all process joined")
                         if client.exitcode is None:
                             warnings.warn(f"The client process '{client.name}' with PID '{client.pid}' failed to exit.")
 

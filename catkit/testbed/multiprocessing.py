@@ -36,7 +36,7 @@ class DeviceComms:
         self.timeout = timeout
 
     @contextmanager
-    def acquire_lock(self, timeout=None, raise_on_fail=True):
+    def acquire_lock(self, timeout, raise_on_fail=True):
         locked = self.lock.acquire(timeout)
         if raise_on_fail and not locked:
             raise RuntimeError(f"Failed to acquire lock after {timeout}s")

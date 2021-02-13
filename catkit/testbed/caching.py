@@ -267,11 +267,9 @@ class DeviceCacheEnum(Enum):
             with device_coms.acquire_lock(timeout=timeout):
                 # Is item an attribute or a method?
                 if device_coms.is_callable(member, item):
-                    print(item, " IS callable")
                     container = DeferredFunc(member, item, device_coms) # Acquires lock.
                     return container.wrapper  # This will release lock when called.
                 else:
-                    print(item, " is NOT callable")
                     # send and get attribute value.
                     return device_coms.get(member, "__getattribute__", item)
 
