@@ -8,6 +8,11 @@ from catkit.testbed.multiprocessing import DeferredFunc, DeviceClient
 
 
 class UserCache(UserDict, ABC):
+    def __init__(self, *args, manager=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager:
+            self.data = manager.dict()
+
     @abstractmethod
     def load(self, key, *args, **kwargs):
         """ Func to load non-existent cache entries. """
@@ -260,8 +265,7 @@ class DeviceCacheEnum(Enum):
         else:
             # multiprocessing: cache lives on different process than caller.
             device_comms = object.__getattribute__(self, "get_cache")()
-            timeout = device_comms.timeout
-            with device_comms.acquire_lock(timeout=timeout):
+            with device_comms.acquire():
                 # Is item an attribute or a method?
                 if device_comms.is_callable(member, item):
                     container = DeferredFunc(member, item, device_comms)  # Acquires lock.
@@ -273,7 +277,7 @@ class DeviceCacheEnum(Enum):
     def __setattr__(self, name, value):
         if "_DeviceCacheEnum__object_exists" in self.__dict__:
             member = self.__class__(self.config_id)
-            if self.comms_group is None:
+            if self.server_address is None:
                 device = self.get_cache()[member]
                 device.__setattr__(name, value)
             else:

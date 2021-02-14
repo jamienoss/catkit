@@ -1,10 +1,13 @@
 from collections import namedtuple
 from contextlib import contextmanager
-import multiprocessing
+from multiprocessing import get_logger
 from multiprocessing.connection import Client, Listener
+from multiprocessing.managers import SyncManager
 
 
 Request = namedtuple("Request", ["member", "func", "args", "kwargs"])
+
+default_timeout = 10
 
 
 class DeferredFunc:
@@ -24,15 +27,14 @@ class DeferredFunc:
         return resp
 
 
-class RLockContainer:
-    def __init__(self, lock, *args, timeout=10, **kwargs):
+class Mutex:
+    def __init__(self, lock, *args, timeout=default_timeout, **kwargs):
         super().__init__(*args, **kwargs)
-        self.lock = lock
+        self.lock = lock.lock if isinstance(lock, Mutex) else lock
         self.timeout = timeout
-        self.log = multiprocessing.get_logger(__name__)
 
     @contextmanager
-    def acquire_lock(self, timeout=None, raise_on_fail=True):
+    def acquire(self, timeout=None, raise_on_fail=True):
         """
             https://docs.python.org/3/library/multiprocessing.html#multiprocessing.RLock
             The parent semantics for `timeout=None` := timeout=infinity. We have zero use case for this and, instead,
@@ -49,14 +51,45 @@ class RLockContainer:
             if locked:
                 self.lock.release()
 
+    def release(self):
+        return self.lock.release()
 
-class DeviceServer(RLockContainer, Listener):
+
+class MutexedAccess(Mutex):
+    def __getattribute__(self, item):
+        with object.__getattribute__(self, "acquire")():
+            return object.__getattribute__(self, item)
+
+    def __setattr__(self, key, value):
+        with self.acquire():
+            setattr(self, key, value)
+
+
+class MutexManager(SyncManager):
+    """ Managers can be connected to from any process using MutexManager(address=<address>).connect().
+        They therefore don't have to be passed to child processes, when created, from the parent.
+        However, SyncManager.RLock() is a factory and has no functionality to return the same locks thus requiring
+        the locks to still be passed to the child processes, when created, from the parent.
+        This class solves this issue.
+    """
+
+    def RLock(self, name, timeout=default_timeout):
+        if not getattr(self, "named_lock", None):
+            # Can't go in __init__() because self.dict() can't be called before the manager is started.
+            self.named_lock = self.dict()
+        if name not in self.named_lock:
+            self.named_lock[name] = Mutex(lock=super().RLock(), timeout=timeout)
+        return self.named_lock[name]
+
+
+class DeviceServer(Mutex, Listener):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.client_process_list = []  # Set in self.listen.
+        self.log = get_logger()
 
         # self.accept() doesn't accept a timeout (tut tut) so we have to set it lower down.
-        # Without this, if no client tries connects, self.accept() will block indefinitely waiting for a connection.
+        # Without this, if no client tries to connect, self.accept() will block indefinitely waiting for a connection.
         # This could happen if a client raises/exits before connecting.
         self._listener._socket.settimeout(self.timeout)
 
@@ -92,22 +125,25 @@ class DeviceServer(RLockContainer, Listener):
 
         with self.accept() as connection:  # The timeout for this is set in `self.__init__()`.
             self.log.info(f"Connection accepted from '{self.last_accepted}'")
-            try:
-                if not self.lock.acquire(self.timeout):
-                    raise RuntimeError(f"Failed to acquire lock after {self.timeout}s")
-                while self.are_clients_alive():  # Spin until there's something to read.
+
+            with self.acquire():
+
+                # Spin until there's something to read,
+                # whilst at least a single client is alive AND none have exited in error.
+                while self.are_clients_alive():
                     if connection.poll():
                         # Read.
                         try:
                             resp = connection.recv()
                         except EOFError:
+                            # The connection could have been closed during the race between poll() & recv().
                             break
 
-                        # Type check.
+                        # Type check response.
                         if not isinstance(resp, Request):
                             raise RuntimeError(f"Expected response type of '{Request}' but got '{type(resp)}'")
 
-                        # Execute.
+                        # Execute response.
                         if resp.member is None:
                             # Call self.func()
                             result = self.__getattribute__(resp.func)(*resp.args, **resp.kwargs)
@@ -117,15 +153,14 @@ class DeviceServer(RLockContainer, Listener):
 
                         # Send the result back to the client (no post send hand shake).
                         connection.send(result)
-            finally:
-                self.lock.release()
         self.log.info("No more clients to listen to.")
 
 
-class DeviceClient(RLockContainer):
+class DeviceClient(Mutex):
     def __init__(self, address, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.address = address
+        self.log = get_logger()
 
     def __enter__(self):
         self.connection = Client(address=self.address, authkey=None)
@@ -135,9 +170,10 @@ class DeviceClient(RLockContainer):
         self.connection.close()
 
     def get(self, member, func, *args, **kwargs):
-        with self.acquire_lock(timeout=self.timeout):
+        with self.acquire():
             self.connection.send(Request(member=member, func=func, args=args, kwargs=kwargs))
-            self.connection.poll(self.timeout)
+            if not self.connection.poll(self.timeout):
+                raise RuntimeError(f"No response available during the given timeout '{self.comms.timeout}'s")
             return self.connection.recv()
 
     def is_callable(self, member, item):

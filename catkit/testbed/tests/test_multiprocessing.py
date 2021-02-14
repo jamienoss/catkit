@@ -1,14 +1,15 @@
-from multiprocessing import Manager, get_context
+from multiprocessing import get_context
 import time
 import warnings
 
 from catkit.emulators.npoint_tiptilt import SimNPointLC400
 from catkit.hardware.npoint.nPointTipTiltController import Parameters
 from catkit.testbed import devices, DeviceCacheEnum
-from catkit.testbed.multiprocessing import DeviceClient, DeviceServer
+from catkit.testbed.multiprocessing import DeviceClient, DeviceServer, MutexManager
 
 
 server_address = ("127.0.0.1", 6001)
+manager_address = ("127.0.0.1", 6002)
 
 
 class Device(DeviceCacheEnum):
@@ -29,7 +30,7 @@ def run_from_client(comms):
     print(Device.NPOINT_C.get_status(1))
 
     for i in range(50):
-        with comms.acquire_lock(10):
+        with comms.acquire(10):
             Device.NPOINT_C.set(Parameters.P_GAIN, 1, 3.14)
             result = Device.NPOINT_C.get(Parameters.P_GAIN, 1)
             print(result)
@@ -45,27 +46,29 @@ def run_from_client2(comms):
     assert Device.NPOINT_C.instrument
     print(Device.NPOINT_C.get_status(1))
 
-    for i in range(50):
-        with comms.acquire_lock(10):
-            Device.NPOINT_C.set(Parameters.P_GAIN, 1, 1.42)
-            result = Device.NPOINT_C.get(Parameters.P_GAIN, 1)
-            print(result)
-            assert result == 1.42
+    manager = MutexManager(address=manager_address)
+    manager.connect()
+    with manager.RLock("client").acquire():
+        for i in range(50):
+            with comms.acquire(10):
+                Device.NPOINT_C.set(Parameters.P_GAIN, 1, 1.42)
+                result = Device.NPOINT_C.get(Parameters.P_GAIN, 1)
+                print(result)
+                assert result == 1.42
 
     print("client2 done")
 
 
-def test():
+def test_device_server():
 
     timeout = 30
 
-    with Manager() as manager:
+    with MutexManager(address=("127.0.0.1", 6002)) as manager:
         with devices:
             with DeviceServer(address=server_address,
-                              lock=manager.RLock(),
-                              timeout=timeout) as device_server:
+                              lock=manager.RLock("server", timeout=timeout)) as device_server:
                 device_server.set_cache(devices)
-                with DeviceClient(address=server_address, timeout=timeout, lock=manager.RLock()) as client_comms:
+                with DeviceClient(address=server_address, lock=manager.RLock("client", timeout=timeout)) as client_comms:
 
                     ctx = get_context("spawn")
                     client_process_list = []
@@ -97,4 +100,4 @@ def test():
 
 
 if __name__ == "__main__":
-    test()
+    test_device_server()
