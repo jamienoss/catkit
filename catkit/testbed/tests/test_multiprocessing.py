@@ -1,5 +1,6 @@
 from multiprocessing import get_context
 import os
+import signal
 import time
 import warnings
 
@@ -51,7 +52,10 @@ def run_from_client2():
         assert Device.NPOINT_C.instrument
         print(Device.NPOINT_C.get_status(1))
 
+        manager = SharedMemoryManager(address=shared_memory_manager_address)
+        manager.connect()
         for i in range(50):
+            #with manager.get_lock_cache()["client"].acquire():
             with comms.acquire():
                 Device.NPOINT_C.set(Parameters.P_GAIN, 1, 1.42)
                 result = Device.NPOINT_C.get(Parameters.P_GAIN, 1)
@@ -75,9 +79,11 @@ def test_device_server():
         SharedMemoryManager.register("get_client_cache", callable=lambda: client_cache, proxytype=DictProxy)
 
         with SharedMemoryManager(address=shared_memory_manager_address) as manager:
-            # Create a single lock to mutex access to ``lock_cache`` and ``client_cache``.
-            manager.get_lock_cache().update({"cache_lock": manager.RLock()})
             print(f"Manager running on pid: {manager.getpid()}")
+
+            # Create a single lock to mutex CAS access to ``lock_cache`` and ``client_cache``.
+            manager.get_lock_cache().update({"cache_lock": manager.RLock()})
+
             with DeviceServer(address=device_server_address) as device_server:
                 device_server.set_cache(devices)
                 ctx = get_context("spawn")
@@ -100,7 +106,7 @@ def test_device_server():
                             # Race exists between is_alive() and here.
                             client.terminate()  # Has no return value (None).
                             client.join(timeout)  # Has no return value (None).
-                            if client.exitcode != 0:
+                            if client.exitcode != 0 and client.exitcode != signal.SIGTERM.value:
                                 warnings.warn(f"The client process '{client.name}' with PID '{client.pid}' failed to exit with exitcode '{client.exitcode}'.")
                     print("All process terminated and joined.")
 
