@@ -8,7 +8,7 @@ import threading
 
 Request = namedtuple("Request", ["member", "func", "args", "kwargs"])
 
-default_timeout = 10
+default_timeout = 60
 default_shared_memory_address = ("127.0.0.1", 6002)
 
 
@@ -131,15 +131,15 @@ class DeviceServer(Mutex, Listener):
         self._listener._socket.settimeout(self.timeout)
 
     def are_clients_alive(self):
-        is_alive = False
+        is_one_alive = False
         for client in self.client_process_list:
             is_alive = client.is_alive()
             if not is_alive:
                 # Check exitcode and raise on error.
                 if client.exitcode != 0:
                     raise RuntimeError(f"The client process '{client.name}' exited with exitcode '{client.exitcode}'")
-            is_alive |= is_alive
-        return is_alive
+            is_one_alive |= is_alive
+        return is_one_alive
 
     @classmethod
     def set_cache(cls, cache):
@@ -163,7 +163,7 @@ class DeviceServer(Mutex, Listener):
         with self.accept() as connection:  # The timeout for this is set in `self.__init__()`.
             self.log.info(f"Connection accepted from '{self.last_accepted}'")
 
-            with self.acquire():
+            with self.acquire():  # Why not...
 
                 # Spin until there's something to read,
                 # whilst at least a single client is alive AND none have exited in error.

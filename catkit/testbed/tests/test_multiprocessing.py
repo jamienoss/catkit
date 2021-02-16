@@ -41,7 +41,7 @@ def run_from_client():
             with comms.acquire():
                 Device.NPOINT_C.set(Parameters.P_GAIN, 1, 3.14)
                 result = Device.NPOINT_C.get(Parameters.P_GAIN, 1)
-                print(os.getpid(), result)
+                print(i, os.getpid(), result)
                 assert result == 3.14
 
     print("client1 done")
@@ -58,12 +58,13 @@ def run_from_client2():
         manager = SharedMemoryManager(address=shared_memory_manager_address)
         manager.connect()
         manager.get_barrier().wait()
+        #with manager.get_lock_cache()["client"].acquire():
         for i in range(50):
-            #with manager.get_lock_cache()["client"].acquire():
+            # with manager.get_lock_cache()["client"].acquire():
             with comms.acquire():
                 Device.NPOINT_C.set(Parameters.P_GAIN, 1, 1.42)
                 result = Device.NPOINT_C.get(Parameters.P_GAIN, 1)
-                print(os.getpid(), result)
+                print(i, os.getpid(), result)
                 assert result == 1.42
 
     print("client2 done")
@@ -101,7 +102,7 @@ def test_device_server():
                     for client in client_process_list:
                         if client.is_alive():
                             # Race exists between is_alive() and here.
-                            client.terminate()  # Has no return value (None).
+                            #client.terminate()  # Has no return value (None).
                             client.join(timeout)  # Has no return value (None).
                             if client.exitcode != 0 and client.exitcode != -signal.SIGTERM.value:
                                 warnings.warn(f"The client process '{client.name}' with PID '{client.pid}' failed to exit with exitcode '{client.exitcode}'.")
