@@ -107,8 +107,8 @@ def test_device_server():
                                 warnings.warn(f"The client process '{client.name}' with PID '{client.pid}' failed to exit with exitcode '{client.exitcode}'.")
                     print("All process terminated and joined.")
 
-            assert not SyncManager.lock_cache
-            assert not SharedMemoryManager.client_cache
+            assert not manager.lock_cache
+            assert not manager.client_cache
             print("lock_cache", manager.get_lock_cache())
             print("client_cache", manager.get_client_cache())
 

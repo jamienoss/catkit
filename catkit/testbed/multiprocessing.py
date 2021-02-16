@@ -75,14 +75,19 @@ class SharedMemoryManager(SyncManager):
         This class solves this issue.
     """
 
-    SyncManager.lock_cache = {}  # Cache for all locks.
-    SyncManager.client_cache = {}  # Cache for all client connections.
-    # Nothing is stored in the above instances and must be accessed with the following registered funcs.
-    SyncManager.register("get_lock_cache", callable=lambda: SyncManager.lock_cache, proxytype=DictProxy)
-    SyncManager.register("get_client_cache", callable=lambda: SyncManager.client_cache, proxytype=DictProxy)
+    def __new__(cls, *args, **kwargs):
+        instance = super().__new__(cls)
 
-    SyncManager.barrier = threading.Barrier(2)
-    SyncManager.register("get_barrier", callable=lambda: SyncManager.barrier, proxytype=BarrierProxy)
+        instance.lock_cache = {}  # Cache for all locks.
+        instance.client_cache = {}  # Cache for all client connections.
+        # Nothing is stored in the above instances and must be accessed with the following registered funcs.
+        instance.register("get_lock_cache", callable=lambda: instance.lock_cache, proxytype=DictProxy)
+        instance.register("get_client_cache", callable=lambda: instance.client_cache, proxytype=DictProxy)
+
+        instance.barrier = threading.Barrier(parties=2)
+        instance.register("get_barrier", callable=lambda: instance.barrier, proxytype=BarrierProxy)
+
+        return instance
 
     def getpid(self):
         return os.getpid()
