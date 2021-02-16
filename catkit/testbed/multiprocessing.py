@@ -3,11 +3,12 @@ from contextlib import contextmanager
 from multiprocessing import get_logger
 from multiprocessing.connection import Client, Listener
 from multiprocessing.managers import SyncManager
-
+import os
 
 Request = namedtuple("Request", ["member", "func", "args", "kwargs"])
 
 default_timeout = 10
+default_shared_memory_address = ("127.0.0.1", 6002)
 
 
 class DeferredFunc:
@@ -65,28 +66,63 @@ class MutexedAccess(Mutex):
             setattr(self, key, value)
 
 
-class MutexManager(SyncManager):
-    """ Managers can be connected to from any process using MutexManager(address=<address>).connect().
+class SharedMemoryManager(SyncManager):
+    """ Managers can be connected to from any process using SharedMemoryManager(address=<address>).connect().
         They therefore don't have to be passed to child processes, when created, from the parent.
         However, SyncManager.RLock() is a factory and has no functionality to return the same locks thus requiring
         the locks to still be passed to the child processes, when created, from the parent.
         This class solves this issue.
     """
 
-    def RLock(self, name, timeout=default_timeout):
-        if not getattr(self, "named_lock", None):
-            # Can't go in __init__() because self.dict() can't be called before the manager is started.
-            self.named_lock = self.dict()
-        if name not in self.named_lock:
-            self.named_lock[name] = Mutex(lock=super().RLock(), timeout=timeout)
-        return self.named_lock[name]
+    def getpid(self):
+        return os.getpid()
+
+    # def __enter__(self):
+    #     super().__enter__()
+    #     self.lock_cache = self.dict()
+    #     self.client_cache = self.dict()
+    #     return self
+
+    # def get_lock(self, name, timeout=default_timeout):
+    #     print(f"get_lock on {os.getpid()}")
+    #     cache = SharedMemoryManager.get_lock_cache()
+    #     if name not in cache:
+    #         print(f"creating new rlock on {os.getpid()}")
+    #         cache[name] = Mutex(lock=self.RLock(), timeout=timeout)
+    #     return cache[name]
+    #
+    # def get_client(self, address):
+    #     print(f"get_client on {os.getpid()}")
+    #     cache = SharedMemoryManager.get_client_cache()
+    #     if address not in cache:
+    #         print(f"creating new client on {os.getpid()}")
+    #         cache[address] = Client(address=address, authkey=None)
+    #     return cache[address]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.register("getpid", callable=self.getpid)
 
 
 class DeviceServer(Mutex, Listener):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.client_process_list = []  # Set in self.listen.
+    def __init__(self, shared_memory_address=default_shared_memory_address, *args, lock="device_server", **kwargs):
+        if isinstance(lock, str):
+            # TODO: Hmmm, would be better to connect in __enter__
+            SyncManager.register("get_lock_cache")
+            manager = SyncManager(address=shared_memory_address)
+            manager.connect()
+            cache = manager.get_lock_cache()
+            with cache["cache_lock"]:
+                cache = manager.get_lock_cache()
+                if lock not in cache:
+                    print(f"creating new rlock ({lock}) on {os.getpid()}")
+                    cache.update({lock: Mutex(lock=manager.RLock())})
+                lock = manager.get_lock_cache().get(lock)
+
+        super().__init__(*args, lock=lock, **kwargs)
+        self.shared_memory_address = shared_memory_address
         self.log = get_logger()
+        self.client_process_list = []  # Set in self.listen.
 
         # self.accept() doesn't accept a timeout (tut tut) so we have to set it lower down.
         # Without this, if no client tries to connect, self.accept() will block indefinitely waiting for a connection.
@@ -157,23 +193,47 @@ class DeviceServer(Mutex, Listener):
 
 
 class DeviceClient(Mutex):
-    def __init__(self, address, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.address = address
+    def __init__(self, server_address, shared_memory_address=default_shared_memory_address, *args, lock="client", **kwargs):
+        if isinstance(lock, str):
+            # TODO: Hmmm, would be better to connect in __enter__
+            SyncManager.register("get_lock_cache")
+            manager = SyncManager(address=shared_memory_address)
+            manager.connect()
+            cache = manager.get_lock_cache()
+            with cache["cache_lock"]:
+                cache = manager.get_lock_cache()
+                if lock not in cache:
+                    print(f"creating new rlock ({lock}) on {os.getpid()}")
+                    cache.update({lock: Mutex(lock=manager.RLock())})
+                lock = manager.get_lock_cache().get(lock)
+
+        super().__init__(*args, lock=lock, **kwargs)
+        self.connection = None
+        self.server_address = server_address
+        self.shared_memory_address = shared_memory_address
         self.log = get_logger()
 
     def __enter__(self):
-        self.connection = Client(address=self.address, authkey=None)
+        SyncManager.register("get_client_cache")
+        manager = SyncManager(address=self.shared_memory_address)
+        manager.connect()  # Get's closed by gc.
+        with manager.get_lock_cache()["cache_lock"]:
+            cache = manager.get_client_cache()
+            if self.server_address not in cache:
+                print(f"creating new client ({self.server_address}) on {os.getpid()}")
+                cache.update({self.server_address: Client(address=self.server_address, authkey=None)})
+            self.connection = manager.get_client_cache().get(self.server_address)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.connection.close()
+        # self.connection is shared so we can't close it.
+        pass
 
     def get(self, member, func, *args, **kwargs):
         with self.acquire():
             self.connection.send(Request(member=member, func=func, args=args, kwargs=kwargs))
             if not self.connection.poll(self.timeout):
-                raise RuntimeError(f"No response available during the given timeout '{self.comms.timeout}'s")
+                raise RuntimeError(f"No response available during the given timeout '{self.timeout}'s")
             return self.connection.recv()
 
     def is_callable(self, member, item):
