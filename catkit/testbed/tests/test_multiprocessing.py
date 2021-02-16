@@ -8,7 +8,7 @@ from catkit.emulators.npoint_tiptilt import SimNPointLC400
 from catkit.hardware.npoint.nPointTipTiltController import Parameters
 from catkit.testbed import devices, DeviceCacheEnum
 from catkit.testbed.multiprocessing import DeviceClient, DeviceServer, SharedMemoryManager
-from multiprocessing.managers import DictProxy
+from multiprocessing.managers import DictProxy, SyncManager
 
 
 device_server_address = ("127.0.0.1", 6001)
@@ -71,13 +71,6 @@ def test_device_server():
 
     timeout = 30
     with devices:
-
-        lock_cache = {}  # Cache for all locks.
-        client_cache = {}  # Cache for all client connections.
-        # Nothing is stored in the above instances and must be accessed with the following registered funcs.
-        SharedMemoryManager.register("get_lock_cache", callable=lambda: lock_cache, proxytype=DictProxy)
-        SharedMemoryManager.register("get_client_cache", callable=lambda: client_cache, proxytype=DictProxy)
-
         with SharedMemoryManager(address=shared_memory_manager_address) as manager:
             print(f"Manager running on pid: {manager.getpid()}")
 
@@ -106,14 +99,14 @@ def test_device_server():
                             # Race exists between is_alive() and here.
                             client.terminate()  # Has no return value (None).
                             client.join(timeout)  # Has no return value (None).
-                            if client.exitcode != 0 and client.exitcode != signal.SIGTERM.value:
+                            if client.exitcode != 0 and client.exitcode != -signal.SIGTERM.value:
                                 warnings.warn(f"The client process '{client.name}' with PID '{client.pid}' failed to exit with exitcode '{client.exitcode}'.")
                     print("All process terminated and joined.")
 
-            assert not lock_cache
-            assert not client_cache
-            print("lock_cache", lock_cache, manager.get_lock_cache())
-            print("client_cache", client_cache, manager.get_client_cache())
+            assert not SyncManager.lock_cache
+            assert not SharedMemoryManager.client_cache
+            print("lock_cache", manager.get_lock_cache())
+            print("client_cache", manager.get_client_cache())
 
 
 if __name__ == "__main__":

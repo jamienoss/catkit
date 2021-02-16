@@ -2,7 +2,7 @@ from collections import namedtuple
 from contextlib import contextmanager
 from multiprocessing import get_logger
 from multiprocessing.connection import Client, Listener
-from multiprocessing.managers import SyncManager
+from multiprocessing.managers import SyncManager, DictProxy
 import os
 
 Request = namedtuple("Request", ["member", "func", "args", "kwargs"])
@@ -73,6 +73,12 @@ class SharedMemoryManager(SyncManager):
         the locks to still be passed to the child processes, when created, from the parent.
         This class solves this issue.
     """
+
+    SyncManager.lock_cache = {}  # Cache for all locks.
+    SyncManager.client_cache = {}  # Cache for all client connections.
+    # Nothing is stored in the above instances and must be accessed with the following registered funcs.
+    SyncManager.register("get_lock_cache", callable=lambda: SyncManager.lock_cache, proxytype=DictProxy)
+    SyncManager.register("get_client_cache", callable=lambda: SyncManager.client_cache, proxytype=DictProxy)
 
     def getpid(self):
         return os.getpid()
