@@ -75,7 +75,7 @@ def test_device_server():
 
     timeout = 30
     with devices:
-        with SharedMemoryManager(address=shared_memory_manager_address) as manager:
+        with SharedMemoryManager(address=shared_memory_manager_address, parties=2) as manager:
             print(f"Manager running on pid: {manager.getpid()}")
 
             # Create a single lock to mutex CAS access to ``lock_cache`` and ``client_cache``.

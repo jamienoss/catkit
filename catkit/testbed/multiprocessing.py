@@ -75,19 +75,19 @@ class SharedMemoryManager(SyncManager):
         This class solves this issue.
     """
 
-    def __new__(cls, *args, **kwargs):
-        instance = super().__new__(cls)
-
-        instance.lock_cache = {}  # Cache for all locks.
-        instance.client_cache = {}  # Cache for all client connections.
-        # Nothing is stored in the above instances and must be accessed with the following registered funcs.
-        instance.register("get_lock_cache", callable=lambda: instance.lock_cache, proxytype=DictProxy)
-        instance.register("get_client_cache", callable=lambda: instance.client_cache, proxytype=DictProxy)
-
-        instance.barrier = threading.Barrier(parties=2)
-        instance.register("get_barrier", callable=lambda: instance.barrier, proxytype=BarrierProxy)
-
-        return instance
+    # def __new__(cls, *args, **kwargs):
+    #     instance = super().__new__(cls)
+    #
+    #     instance.lock_cache = {}  # Cache for all locks.
+    #     instance.client_cache = {}  # Cache for all client connections.
+    #     # Nothing is stored in the above instances and must be accessed with the following registered funcs.
+    #     instance.register("get_lock_cache", callable=lambda: instance.lock_cache, proxytype=DictProxy)
+    #     instance.register("get_client_cache", callable=lambda: instance.client_cache, proxytype=DictProxy)
+    #
+    #     instance.barrier = threading.Barrier(parties=2)
+    #     instance.register("get_barrier", callable=lambda: instance.barrier, proxytype=BarrierProxy)
+    #
+    #     return instance
 
     def getpid(self):
         return os.getpid()
@@ -114,9 +114,18 @@ class SharedMemoryManager(SyncManager):
     #         cache[address] = Client(address=address, authkey=None)
     #     return cache[address]
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, parties=0, **kwargs):
         super().__init__(*args, **kwargs)
         self.register("getpid", callable=self.getpid)
+
+        self.lock_cache = {}  # Cache for all locks.
+        self.client_cache = {}  # Cache for all client connections.
+        # Nothing is stored in the above instances and must be accessed with the following registered funcs.
+        self.register("get_lock_cache", callable=lambda: self.lock_cache, proxytype=DictProxy)
+        self.register("get_client_cache", callable=lambda: self.client_cache, proxytype=DictProxy)
+
+        self.barrier = threading.Barrier(parties=parties)
+        self.register("get_barrier", callable=lambda: self.barrier, proxytype=BarrierProxy)
 
 
 class DeviceServer(Mutex, Listener):
