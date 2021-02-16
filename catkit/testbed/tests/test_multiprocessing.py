@@ -96,13 +96,14 @@ def test_device_server():
                         client.start()
 
                     # Start listening. This parent process is the device server.
+                    # This will listen as long as a single client is still alive AND none exited abnormally.
                     device_server.listen(client_process_list)
                 finally:
                     # Terminate and join all client/child processes.
                     for client in client_process_list:
                         if client.is_alive():
                             # Race exists between is_alive() and here.
-                            #client.terminate()  # Has no return value (None).
+                            client.terminate()  # Has no return value (None).
                             client.join(timeout)  # Has no return value (None).
                             if client.exitcode != 0 and client.exitcode != -signal.SIGTERM.value:
                                 warnings.warn(f"The client process '{client.name}' with PID '{client.pid}' failed to exit with exitcode '{client.exitcode}'.")
