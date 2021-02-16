@@ -75,45 +75,6 @@ class SharedMemoryManager(SyncManager):
         This class solves this issue.
     """
 
-    # def __new__(cls, *args, **kwargs):
-    #     instance = super().__new__(cls)
-    #
-    #     instance.lock_cache = {}  # Cache for all locks.
-    #     instance.client_cache = {}  # Cache for all client connections.
-    #     # Nothing is stored in the above instances and must be accessed with the following registered funcs.
-    #     instance.register("get_lock_cache", callable=lambda: instance.lock_cache, proxytype=DictProxy)
-    #     instance.register("get_client_cache", callable=lambda: instance.client_cache, proxytype=DictProxy)
-    #
-    #     instance.barrier = threading.Barrier(parties=2)
-    #     instance.register("get_barrier", callable=lambda: instance.barrier, proxytype=BarrierProxy)
-    #
-    #     return instance
-
-    def getpid(self):
-        return os.getpid()
-
-    # def __enter__(self):
-    #     super().__enter__()
-    #     self.lock_cache = self.dict()
-    #     self.client_cache = self.dict()
-    #     return self
-
-    # def get_lock(self, name, timeout=default_timeout):
-    #     print(f"get_lock on {os.getpid()}")
-    #     cache = SharedMemoryManager.get_lock_cache()
-    #     if name not in cache:
-    #         print(f"creating new rlock on {os.getpid()}")
-    #         cache[name] = Mutex(lock=self.RLock(), timeout=timeout)
-    #     return cache[name]
-    #
-    # def get_client(self, address):
-    #     print(f"get_client on {os.getpid()}")
-    #     cache = SharedMemoryManager.get_client_cache()
-    #     if address not in cache:
-    #         print(f"creating new client on {os.getpid()}")
-    #         cache[address] = Client(address=address, authkey=None)
-    #     return cache[address]
-
     def __init__(self, *args, parties=0, **kwargs):
         super().__init__(*args, **kwargs)
         self.register("getpid", callable=self.getpid)
@@ -127,21 +88,37 @@ class SharedMemoryManager(SyncManager):
         self.barrier = threading.Barrier(parties=parties)
         self.register("get_barrier", callable=lambda: self.barrier, proxytype=BarrierProxy)
 
+    def getpid(self):
+        return os.getpid()
+
+    @classmethod
+    def get_lock(cls, address, name, timeout=default_timeout):
+        cls.register("get_lock_cache")
+        manager = cls(address=address)
+        manager.connect()
+        cache = manager.get_lock_cache()
+        with cache["cache_lock"]:
+            cache = manager.get_lock_cache()
+            if name not in cache:
+                cache.update({name: Mutex(lock=manager.RLock(), timeout=timeout)})
+            return manager.get_lock_cache().get(name)
+
+    @classmethod
+    def get_client(cls, server_address, shared_memory_address):
+        cls.register("get_client_cache")
+        manager = cls(address=shared_memory_address)
+        manager.connect()  # Get's closed by gc.
+        with manager.get_lock_cache()["cache_lock"]:
+            cache = manager.get_client_cache()
+            if server_address not in cache:
+                cache.update({server_address: Client(address=server_address, authkey=None)})
+            return manager.get_client_cache().get(server_address)
+
 
 class DeviceServer(Mutex, Listener):
     def __init__(self, shared_memory_address=default_shared_memory_address, *args, lock="device_server", **kwargs):
         if isinstance(lock, str):
-            # TODO: Hmmm, would be better to connect in __enter__
-            SharedMemoryManager.register("get_lock_cache")
-            manager = SharedMemoryManager(address=shared_memory_address)
-            manager.connect()
-            cache = manager.get_lock_cache()
-            with cache["cache_lock"]:
-                cache = manager.get_lock_cache()
-                if lock not in cache:
-                    print(f"creating new rlock ({lock}) on {os.getpid()}")
-                    cache.update({lock: Mutex(lock=manager.RLock())})
-                lock = manager.get_lock_cache().get(lock)
+            lock = SharedMemoryManager.get_lock(shared_memory_address, lock)
 
         super().__init__(*args, lock=lock, **kwargs)
         self.shared_memory_address = shared_memory_address
@@ -219,17 +196,7 @@ class DeviceServer(Mutex, Listener):
 class DeviceClient(Mutex):
     def __init__(self, server_address, shared_memory_address=default_shared_memory_address, *args, lock="client", **kwargs):
         if isinstance(lock, str):
-            # TODO: Hmmm, would be better to connect in __enter__
-            SharedMemoryManager.register("get_lock_cache")
-            manager = SharedMemoryManager(address=shared_memory_address)
-            manager.connect()
-            cache = manager.get_lock_cache()
-            with cache["cache_lock"]:
-                cache = manager.get_lock_cache()
-                if lock not in cache:
-                    print(f"creating new rlock ({lock}) on {os.getpid()}")
-                    cache.update({lock: Mutex(lock=manager.RLock())})
-                lock = manager.get_lock_cache().get(lock)
+            lock = SharedMemoryManager.get_lock(shared_memory_address, lock)
 
         super().__init__(*args, lock=lock, **kwargs)
         self.connection = None
@@ -238,15 +205,7 @@ class DeviceClient(Mutex):
         self.log = get_logger()
 
     def __enter__(self):
-        SharedMemoryManager.register("get_client_cache")
-        manager = SharedMemoryManager(address=self.shared_memory_address)
-        manager.connect()  # Get's closed by gc.
-        with manager.get_lock_cache()["cache_lock"]:
-            cache = manager.get_client_cache()
-            if self.server_address not in cache:
-                print(f"creating new client ({self.server_address}) on {os.getpid()}")
-                cache.update({self.server_address: Client(address=self.server_address, authkey=None)})
-            self.connection = manager.get_client_cache().get(self.server_address)
+        self.connection = SharedMemoryManager.get_client(self.server_address, self.shared_memory_address)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
