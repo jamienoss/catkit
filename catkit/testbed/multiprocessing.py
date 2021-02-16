@@ -1,8 +1,8 @@
 from collections import namedtuple, UserDict
 from contextlib import contextmanager
-from multiprocessing import get_logger
-from multiprocessing.connection import Client, Listener
-from multiprocessing.managers import SyncManager, BarrierProxy, DictProxy
+from multiprocess import get_logger
+from multiprocess.connection import Client, Listener
+from multiprocess.managers import SyncManager, BarrierProxy, DictProxy
 import os
 import threading
 

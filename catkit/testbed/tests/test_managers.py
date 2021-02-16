@@ -1,6 +1,6 @@
 import logging
-from multiprocessing import get_context, get_logger
-from multiprocessing.managers import SyncManager, DictProxy
+from multiprocess import get_context, get_logger
+from multiprocess.managers import SyncManager, DictProxy
 import os
 import pickle
 import time

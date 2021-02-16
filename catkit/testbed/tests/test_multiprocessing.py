@@ -1,4 +1,4 @@
-from multiprocessing import get_context
+from multiprocess import get_context
 import os
 import signal
 import time
