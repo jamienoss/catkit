@@ -108,8 +108,8 @@ class DeviceServer(Mutex, Listener):
     def __init__(self, shared_memory_address=default_shared_memory_address, *args, lock="device_server", **kwargs):
         if isinstance(lock, str):
             # TODO: Hmmm, would be better to connect in __enter__
-            SyncManager.register("get_lock_cache")
-            manager = SyncManager(address=shared_memory_address)
+            SharedMemoryManager.register("get_lock_cache")
+            manager = SharedMemoryManager(address=shared_memory_address)
             manager.connect()
             cache = manager.get_lock_cache()
             with cache["cache_lock"]:
@@ -196,8 +196,8 @@ class DeviceClient(Mutex):
     def __init__(self, server_address, shared_memory_address=default_shared_memory_address, *args, lock="client", **kwargs):
         if isinstance(lock, str):
             # TODO: Hmmm, would be better to connect in __enter__
-            SyncManager.register("get_lock_cache")
-            manager = SyncManager(address=shared_memory_address)
+            SharedMemoryManager.register("get_lock_cache")
+            manager = SharedMemoryManager(address=shared_memory_address)
             manager.connect()
             cache = manager.get_lock_cache()
             with cache["cache_lock"]:
@@ -214,8 +214,8 @@ class DeviceClient(Mutex):
         self.log = get_logger()
 
     def __enter__(self):
-        SyncManager.register("get_client_cache")
-        manager = SyncManager(address=self.shared_memory_address)
+        SharedMemoryManager.register("get_client_cache")
+        manager = SharedMemoryManager(address=self.shared_memory_address)
         manager.connect()  # Get's closed by gc.
         with manager.get_lock_cache()["cache_lock"]:
             cache = manager.get_client_cache()

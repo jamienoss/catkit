@@ -6,9 +6,8 @@ import warnings
 from catkit.emulators.npoint_tiptilt import SimNPointLC400
 from catkit.hardware.npoint.nPointTipTiltController import Parameters
 from catkit.testbed import devices, DeviceCacheEnum
-from multiprocessing.connection import Client
 from catkit.testbed.multiprocessing import DeviceClient, DeviceServer, SharedMemoryManager
-from multiprocessing.managers import SyncManager, DictProxy
+from multiprocessing.managers import DictProxy
 
 
 device_server_address = ("127.0.0.1", 6001)
@@ -38,7 +37,7 @@ def run_from_client():
             with comms.acquire():
                 Device.NPOINT_C.set(Parameters.P_GAIN, 1, 3.14)
                 result = Device.NPOINT_C.get(Parameters.P_GAIN, 1)
-                print(result)
+                print(os.getpid(), result)
                 assert result == 3.14
 
     print("client1 done")
@@ -56,7 +55,7 @@ def run_from_client2():
             with comms.acquire():
                 Device.NPOINT_C.set(Parameters.P_GAIN, 1, 1.42)
                 result = Device.NPOINT_C.get(Parameters.P_GAIN, 1)
-                print(result)
+                print(os.getpid(), result)
                 assert result == 1.42
 
     print("client2 done")
@@ -72,15 +71,13 @@ def test_device_server():
         lock_cache = {}  # Cache for all locks.
         client_cache = {}  # Cache for all client connections.
         # Nothing is stored in the above instances and must be accessed with the following registered funcs.
-        SyncManager.register("get_lock_cache", callable=lambda: lock_cache, proxytype=DictProxy)
-        SyncManager.register("get_client_cache", callable=lambda: client_cache, proxytype=DictProxy)
+        SharedMemoryManager.register("get_lock_cache", callable=lambda: lock_cache, proxytype=DictProxy)
+        SharedMemoryManager.register("get_client_cache", callable=lambda: client_cache, proxytype=DictProxy)
 
-        with SyncManager(address=shared_memory_manager_address) as manager:
+        with SharedMemoryManager(address=shared_memory_manager_address) as manager:
             # Create a single lock to mutex access to ``lock_cache`` and ``client_cache``.
             manager.get_lock_cache().update({"cache_lock": manager.RLock()})
-
-            #print(f"Manager running on pid: {manager.getpid()}")
-
+            print(f"Manager running on pid: {manager.getpid()}")
             with DeviceServer(address=device_server_address) as device_server:
                 device_server.set_cache(devices)
                 ctx = get_context("spawn")
