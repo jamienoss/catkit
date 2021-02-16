@@ -2,11 +2,13 @@ import logging
 from multiprocessing import get_context, get_logger
 from multiprocessing.managers import SyncManager, DictProxy
 import os
+import pickle
 import time
 import sys
 
 shared_memory_manager_address = ("127.0.0.1", 6002)
 
+print(pickle.DEFAULT_PROTOCOL, pickle.HIGHEST_PROTOCOL)
 
 def client1():
     print(f"Client1 running... ({os.getpid()})")

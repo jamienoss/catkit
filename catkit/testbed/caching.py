@@ -4,7 +4,7 @@ from enum import Enum
 import warnings
 
 from catkit.interfaces.Instrument import Instrument
-from catkit.testbed.multiprocessing import DeferredFunc, DeviceClient
+from catkit.testbed.multiprocessing import DeferredFunc
 
 
 class UserCache(UserDict, ABC):

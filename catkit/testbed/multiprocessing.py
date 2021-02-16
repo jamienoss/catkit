@@ -1,4 +1,4 @@
-from collections import namedtuple
+from collections import namedtuple, UserDict
 from contextlib import contextmanager
 from multiprocessing import get_logger
 from multiprocessing.connection import Client, Listener
@@ -10,6 +10,18 @@ Request = namedtuple("Request", ["member", "func", "args", "kwargs"])
 
 default_timeout = 60
 default_shared_memory_address = ("127.0.0.1", 6002)
+
+
+@contextmanager
+def acquire(lock, timeout=None, raise_on_fail=True):
+    locked = lock.acquire(timeout=timeout)
+    if raise_on_fail and not locked:
+        raise RuntimeError(f"Failed to acquire lock after {timeout}s")
+    try:
+        yield locked
+    finally:
+        if locked:
+            lock.release()
 
 
 class DeferredFunc:
@@ -35,7 +47,6 @@ class Mutex:
         self.lock = lock.lock if isinstance(lock, Mutex) else lock
         self.timeout = timeout
 
-    @contextmanager
     def acquire(self, timeout=None, raise_on_fail=True):
         """
             https://docs.python.org/3/library/multiprocessing.html#multiprocessing.RLock
@@ -44,14 +55,7 @@ class Mutex:
         """
         if timeout is None:
             timeout = self.timeout
-        locked = self.lock.acquire(timeout=timeout)
-        if raise_on_fail and not locked:
-            raise RuntimeError(f"Failed to acquire lock after {timeout}s")
-        try:
-            yield locked
-        finally:
-            if locked:
-                self.lock.release()
+        return acquire(lock=self.lock, timeout=timeout, raise_on_fail=raise_on_fail)
 
     def release(self):
         return self.lock.release()
@@ -77,10 +81,13 @@ class SharedMemoryManager(SyncManager):
 
     def __init__(self, *args, parties=0, **kwargs):
         super().__init__(*args, **kwargs)
+        self.log = get_logger()
+
         self.register("getpid", callable=self.getpid)
 
         self.lock_cache = {}  # Cache for all locks.
         self.client_cache = {}  # Cache for all client connections.
+
         # Nothing is stored in the above instances and must be accessed with the following registered funcs.
         self.register("get_lock_cache", callable=lambda: self.lock_cache, proxytype=DictProxy)
         self.register("get_client_cache", callable=lambda: self.client_cache, proxytype=DictProxy)
@@ -221,3 +228,30 @@ class DeviceClient(Mutex):
 
     def is_callable(self, member, item):
         return self.get(None, "callable", member, item)
+
+
+class SharedDict(UserDict):
+    """ The use of locks isn't necessary to mutex access to `self.data`, that is handled by the manager.
+        However, it is necessary if wanting to mutex multiple accesses from the caller.
+    """
+
+    def __init__(self, *args, manager=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager:
+            self.lock = manager.get_lock(address=manager.address, name=type(self).__name__)
+            self.data = manager.dict()
+        else:
+            self.lock = None
+
+    def __getitem__(self, item):
+        with self.acquire():
+            return self.data.get(item, None)
+
+    def __setitem__(self, key, value):
+        with self.acquire():
+            super().__setitem__(key, value)
+
+    def acquire(self, timeout=None, raise_on_fail=True):
+        if not self.lock:
+            return
+        return self.lock.acquire(timeout=timeout, raise_on_fail=raise_on_fail)

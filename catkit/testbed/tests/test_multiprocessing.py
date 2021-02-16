@@ -8,7 +8,6 @@ from catkit.emulators.npoint_tiptilt import SimNPointLC400
 from catkit.hardware.npoint.nPointTipTiltController import Parameters
 from catkit.testbed import devices, DeviceCacheEnum
 from catkit.testbed.multiprocessing import DeviceClient, DeviceServer, SharedMemoryManager
-from multiprocessing.managers import DictProxy, SyncManager
 
 
 device_server_address = ("127.0.0.1", 6001)
@@ -77,7 +76,6 @@ def test_device_server():
     timeout = 30
     with devices:
         with SharedMemoryManager(address=shared_memory_manager_address, parties=2) as manager:
-            print(f"Manager running on pid: {manager.getpid()}")
 
             # Create a single lock to mutex CAS access to ``lock_cache`` and ``client_cache``.
             manager.get_lock_cache().update({"cache_lock": manager.RLock()})
