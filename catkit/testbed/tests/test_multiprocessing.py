@@ -34,6 +34,9 @@ def run_from_client():
         assert Device.NPOINT_C.instrument
         print(Device.NPOINT_C.get_status(1))
 
+        manager = SharedMemoryManager(address=shared_memory_manager_address)
+        manager.connect()
+        manager.get_barrier().wait()
         for i in range(50):
             with comms.acquire():
                 Device.NPOINT_C.set(Parameters.P_GAIN, 1, 3.14)
@@ -54,6 +57,7 @@ def run_from_client2():
 
         manager = SharedMemoryManager(address=shared_memory_manager_address)
         manager.connect()
+        manager.get_barrier().wait()
         for i in range(50):
             #with manager.get_lock_cache()["client"].acquire():
             with comms.acquire():

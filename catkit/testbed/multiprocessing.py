@@ -2,8 +2,9 @@ from collections import namedtuple
 from contextlib import contextmanager
 from multiprocessing import get_logger
 from multiprocessing.connection import Client, Listener
-from multiprocessing.managers import SyncManager, DictProxy
+from multiprocessing.managers import SyncManager, BarrierProxy, DictProxy
 import os
+import threading
 
 Request = namedtuple("Request", ["member", "func", "args", "kwargs"])
 
@@ -79,6 +80,9 @@ class SharedMemoryManager(SyncManager):
     # Nothing is stored in the above instances and must be accessed with the following registered funcs.
     SyncManager.register("get_lock_cache", callable=lambda: SyncManager.lock_cache, proxytype=DictProxy)
     SyncManager.register("get_client_cache", callable=lambda: SyncManager.client_cache, proxytype=DictProxy)
+
+    SyncManager.barrier = threading.Barrier(2)
+    SyncManager.register("get_barrier", callable=lambda: SyncManager.barrier, proxytype=BarrierProxy)
 
     def getpid(self):
         return os.getpid()
