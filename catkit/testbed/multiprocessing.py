@@ -1,4 +1,4 @@
-from collections import namedtuple, UserDict
+from collections import namedtuple
 from contextlib import contextmanager
 from multiprocess import get_logger
 from multiprocess.connection import Client, Listener
@@ -228,30 +228,3 @@ class DeviceClient(Mutex):
 
     def is_callable(self, member, item):
         return self.get(None, "callable", member, item)
-
-
-class SharedDict(UserDict):
-    """ The use of locks isn't necessary to mutex access to `self.data`, that is handled by the manager.
-        However, it is necessary if wanting to mutex multiple accesses from the caller.
-    """
-
-    def __init__(self, *args, manager=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        if manager:
-            self.lock = manager.get_lock(address=manager.address, name=type(self).__name__)
-            self.data = manager.dict()
-        else:
-            self.lock = None
-
-    def __getitem__(self, item):
-        with self.acquire():
-            return self.data.get(item, None)
-
-    def __setitem__(self, key, value):
-        with self.acquire():
-            super().__setitem__(key, value)
-
-    def acquire(self, timeout=None, raise_on_fail=True):
-        if not self.lock:
-            return
-        return self.lock.acquire(timeout=timeout, raise_on_fail=raise_on_fail)

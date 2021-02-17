@@ -1,5 +1,6 @@
 from abc import abstractmethod, ABC
 from collections import namedtuple, UserDict
+from contextlib import contextmanager
 from enum import Enum
 import warnings
 
@@ -10,8 +11,9 @@ from catkit.testbed.multiprocessing import DeferredFunc
 class UserCache(UserDict, ABC):
     def __init__(self, *args, manager=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.manager = manager
         if manager:
-            self.data = manager.dict()
+            self.data = manager.dict()  # This is implicitly mutexed by the manager.
 
     @abstractmethod
     def load(self, key, *args, **kwargs):
@@ -25,6 +27,45 @@ class UserCache(UserDict, ABC):
         else:
             return item
 
+    def __del__(self):
+        if self.manager:
+            # The manager has to do this remotely as the the local client connection to the manager has most
+            # likely been closed and garbage collected already. Note: whilst the manager will eventually del/clear the
+            # dict, it won't do so until it is shutdown.
+            return
+        # Clear only the dict caches, the other attributes we don't care about and can handle themselves.
+        self.clear()
+
+
+class MutexedCache(UserCache):
+    """ The use of locks isn't necessary to mutex access to `self.data`, that is handled by the manager.
+        However, it is necessary if wanting to mutex multiple accesses from the caller.
+    """
+
+    def __init__(self, *args, manager=None, **kwargs):
+        super().__init__(*args, manager=manager, **kwargs)
+        self.lock = manager.get_lock(address=manager.address, name=type(self).__name__) if manager else None
+
+    def load(self, key, *args, **kwargs):
+        """ Func to load non-existent cache entries. """
+        # This is abstract for the base class but we'll make it concrete here. It ca be overridden if desired.
+        raise KeyError(key)
+
+    def __getitem__(self, item):
+        with self.acquire():
+            return super().__getitem__(item)
+
+    def __setitem__(self, key, value):
+        with self.acquire():
+            super().__setitem__(key, value)
+
+    @contextmanager
+    def acquire(self, timeout=None, raise_on_fail=True):
+        if self.lock:
+            yield self.lock.acquire(timeout=timeout, raise_on_fail=raise_on_fail)
+        else:
+            yield
+
 
 class ContextCache(UserCache):
     """ Cache of context managed items (non device/instrument). """
@@ -37,9 +78,6 @@ class ContextCache(UserCache):
         except Exception:
             warnings.warn(f"{key} failed to exit.")
         del self.data[key]
-
-    def __del__(self):
-        self.clear()
 
 
 # This will get nuked once all hardware adheres to the Instrument interface.
@@ -325,6 +363,12 @@ class RestrictedDeviceCache(DeviceCache):
     def __del__(self):
         super().__setattr__("__lock", False)
         self.clear()
+
+
+class DictProperty(property):
+    """ Trivial wrapper of property allowing for dict keys to be attributes. """
+    def __init__(self, name):
+        super().__init__(fget=lambda self: self[name], fset=lambda self, value: self.__setitem__(name, value))
 
 
 # Restrict the device cache such that only linking is allowed. Once run_experiment() is called this gets swapped
