@@ -2,6 +2,7 @@ import time
 
 import pytest
 
+from catkit.multiprocessing import DEFAULT_SHARED_MEMORY_SERVER_ADDRESS, EXCEPTION_SERVER_ADDRESS
 from catkit.testbed.experiment import Experiment, SafetyException, SafetyTest, Testbed
 
 
@@ -69,3 +70,19 @@ def test_safety_fail_during_run(tmpdir):
             experiment.join()
 
     assert time.time() - t0 < 10*1.1  # 10%
+
+
+@pytest.mark.dont_own_exception_handler
+def test_auto_ports(tmpdir):
+    address = ("127.0.0.1", 0)
+
+    with Testbed(safety_tests=[NonFailingSafetyTest], output_path=tmpdir, exception_server_address=address) as testbed:
+        assert testbed.exception_manager.address[1] != 0
+        # NOTE: It's possible for this assertion to coincidentally fail.
+        assert testbed.exception_manager.address[1] not in (DEFAULT_SHARED_MEMORY_SERVER_ADDRESS[1], EXCEPTION_SERVER_ADDRESS[1])
+
+        experiment = ExperimentTest(sleep=10, output_path=tmpdir, exception_server_address=testbed.exception_manager.address)
+        assert experiment.exception_manager.address == testbed.exception_manager.address
+        experiment.start()
+        assert experiment.exception_manager.address == testbed.exception_manager.address
+        experiment.join()

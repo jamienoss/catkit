@@ -49,6 +49,26 @@ def test_pid():
             client.join()
 
 
+exception_server_address = ("127.0.0.1", 8809)
+
+
+class ProcessTest(Process):
+    def run(self, *args, **kwargs):
+        assert self._exception_server_address == exception_server_address
+        return super().run(*args, **kwargs)
+
+
+@pytest.mark.dont_own_exception_handler
+def test_passing_exception_server_address_to_process():
+    def client_func():
+        pass
+
+    client = ProcessTest(target=client_func, exception_server_address=exception_server_address)
+    client.start()
+    client.join()
+
+
+@pytest.mark.dont_own_exception_handler
 def test_authentication():
     authkey = os.urandom(128)
 
@@ -63,6 +83,7 @@ def test_authentication():
         client.join()
 
 
+@pytest.mark.dont_own_exception_handler
 def test_authentication_from_address():
     address = ("127.0.0.1", 7777, os.urandom(128))
 
@@ -77,6 +98,7 @@ def test_authentication_from_address():
         client.join()
 
 
+@pytest.mark.dont_own_exception_handler
 def test_failed_authentication():
     def client_func():
         manager = SharedMemoryManager(authkey=os.urandom(128))
@@ -88,6 +110,36 @@ def test_failed_authentication():
     with SharedMemoryManager(authkey=os.urandom(128)):
         client.start()
         client.join()
+
+
+@pytest.mark.dont_own_exception_handler
+def test_port_conflict():
+    address = ("127.0.0.1", 7007)
+    with SharedMemoryManager(address=address) as manager1:
+        with pytest.raises(EOFError):
+            with SharedMemoryManager(address=address) as manager2:
+                pass
+
+
+@pytest.mark.dont_own_exception_handler
+def test_auto_port():
+    address = ("127.0.0.1", 0)
+
+    manager1 = SharedMemoryManager(address=address)
+    assert manager1.address == address
+    assert manager1._address == address
+
+    with manager1:
+        with SharedMemoryManager(address=address) as manager2:
+            port1 = manager1.address[1]
+            port2 = manager2.address[1]
+            assert isinstance(port1, int)
+            assert isinstance(port2, int)
+            assert port1 != 0
+            assert port2 != 0
+            assert port1 != port2
+            assert port1 == manager1._address[1]
+            assert port2 == manager2._address[1]
 
 
 def test_no_persistent_server():

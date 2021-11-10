@@ -146,6 +146,10 @@ class CatkitServer(Server):
 
 
 class Process(CONTEXT.Process):
+    def __init__(self, *args, exception_server_address=None, **kwargs):
+        self._exception_server_address = EXCEPTION_SERVER_ADDRESS if exception_server_address is None else exception_server_address
+        super().__init__(*args, **kwargs)
+
     def run(self):
         """ Catch exception on child process and save in shared memory manager for parent to read.
             This is executed on the child process.
@@ -155,7 +159,7 @@ class Process(CONTEXT.Process):
             assert pid
             super().run()
         except Exception as error:
-            manager = SharedMemoryManager(address=EXCEPTION_SERVER_ADDRESS)
+            manager = SharedMemoryManager(address=self._exception_server_address)
             try:  # Manager may not have been started.
                 manager.connect()
             except Exception:
@@ -181,7 +185,7 @@ class Process(CONTEXT.Process):
             raise TimeoutError(f"The process '{self.name}' on PID {self.pid} failed to join after {timeout} seconds")
         else:
             child_exception = None
-            manager = SharedMemoryManager(address=EXCEPTION_SERVER_ADDRESS)
+            manager = SharedMemoryManager(address=self._exception_server_address)
             try:  # Manager may not have been started.
                 manager.connect()
             except Exception:
@@ -635,7 +639,7 @@ class SharedMemoryManager(SyncManager):
 
         # For the simplicity of passing around args, by design, we allow the authkey to belong to the address tuple.
         # Parse out authkey.
-        if len(address) == 3:
+        if isinstance(address, (list, tuple)) and len(address) == 3:
             if authkey is not None:
                 raise ValueError("The authkey cannot be passed in by both the address and as a kwarg.")
 
@@ -653,27 +657,60 @@ class SharedMemoryManager(SyncManager):
         self.event_cache = None
         self.child_process_exceptions = None
 
-        self.initargs = [address]
+        self.initargs = []
+
+    # PATCH to stash address as a class attr on the server process.
+    # NOTE: `initializer` is called before the final address is determined by `cls._Server` (when address = ("", 0).)
+    #       and as such this assignment can't happen there. Additionally, `_run_server` never returns (serves forever)
+    #       and therefore the address assignment can't happen in an overridden func post call to `super()._run_server`.
+    @classmethod
+    def _run_server(cls, registry, address, authkey, serializer, writer,
+                    initializer=None, initargs=()):
+        '''
+        Create a server, report its address and run it
+        '''
+        if initializer is not None:
+            initializer(*initargs)
+
+        # create server
+        server = cls._Server(registry, address, authkey, serializer)
+
+        #--------BEGIN PATCH-----------
+        # NOTE: Grant all server process code (global) knowledge of its own address.
+        SharedMemoryManager.server_address = address
+        #----------END PATCH-----------
+
+        # inform parent process of the server's address
+        writer.send(server.address)
+        writer.close()
+
+        # run the manager
+        util.info('manager serving at %r', server.address)
+        server.serve_forever()
 
     @staticmethod
-    def initializer(address):
+    def initializer():
         """ Make "initializer" a func such that multiples can be defined via class inheritance.
             NOTE: self.initargs are the args that get passed to this func by self.start() and are called by the child
                   process as initializer(*initargs), therefore, the order of self.initargs matters.
         """
-
         # NOTE: Explicitly ref SharedMemoryManager rather than cls such that derived classes mutate their base attrs.
         SharedMemoryManager.is_a_server_process = True
-        SharedMemoryManager.server_address = address
         SharedMemoryManager.server_pid = os.getpid()
+        # SharedMemoryManager.server_address = address  # NOTE: This is assigned by `_run_server()`.
 
     def start(self, initializer=None, initargs=None):
 
-        if initializer is not None or initargs is not None:
-            raise TypeError("Don't pass `initializer` and `initargs` to start(). Instead define `cls.initializer` and `self.initargs`.")
+        if initializer is None:
+            initializer = self.initializer
 
-        super().start(initializer=self.initializer, initargs=self.initargs)
+            if initargs is not None:
+                raise TypeError("No initilizer was passed yet initargs is not None.")
+            initargs = self.initargs
+
+        super().start(initializer=initializer, initargs=initargs)
         self.server_pid = self.getpid()
+        # self.address = self._a
         self.log.info(f"Shared memory manager started on PID: '{self.server_pid}'")
 
     def shutdown(self):
