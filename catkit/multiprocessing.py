@@ -17,7 +17,7 @@ DEFAULT_TIMEOUT = 60
 
 # TODO: When using servers across networked machines, the loopback IP won't be viable.
 DEFAULT_SHARED_MEMORY_SERVER_ADDRESS = ("127.0.0.1", 6000)  # IP, port.
-EXCEPTION_SERVER_ADDRESS = ("127.0.0.1", 6001)  # IP, port.
+ROOT_SERVER_ADDRESS = ("127.0.0.1", 6001)  # IP, port.
 
 CONTEXT_METHOD = "spawn"
 CONTEXT = get_context(CONTEXT_METHOD)
@@ -146,8 +146,8 @@ class CatkitServer(Server):
 
 
 class Process(CONTEXT.Process):
-    def __init__(self, *args, exception_server_address=None, **kwargs):
-        self._exception_server_address = EXCEPTION_SERVER_ADDRESS if exception_server_address is None else exception_server_address
+    def __init__(self, *args, root_server_address=None, **kwargs):
+        self._root_server_address = ROOT_SERVER_ADDRESS if root_server_address is None else root_server_address
         super().__init__(*args, **kwargs)
 
     def run(self):
@@ -159,7 +159,7 @@ class Process(CONTEXT.Process):
             assert pid
             super().run()
         except Exception as error:
-            manager = SharedMemoryManager(address=self._exception_server_address)
+            manager = SharedMemoryManager(address=self._root_server_address)
             try:  # Manager may not have been started.
                 manager.connect()
             except Exception:
@@ -185,7 +185,7 @@ class Process(CONTEXT.Process):
             raise TimeoutError(f"The process '{self.name}' on PID {self.pid} failed to join after {timeout} seconds")
         else:
             child_exception = None
-            manager = SharedMemoryManager(address=self._exception_server_address)
+            manager = SharedMemoryManager(address=self._root_server_address)
             try:  # Manager may not have been started.
                 manager.connect()
             except Exception:

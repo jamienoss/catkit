@@ -49,26 +49,26 @@ def test_pid():
             client.join()
 
 
-exception_server_address = ("127.0.0.1", 8809)
+root_server_address = ("127.0.0.1", 8809)
 
 
 class ProcessTest(Process):
     def run(self, *args, **kwargs):
-        assert self._exception_server_address == exception_server_address
+        assert self._root_server_address == root_server_address
         return super().run(*args, **kwargs)
 
 
-@pytest.mark.dont_own_exception_handler
-def test_passing_exception_server_address_to_process():
+@pytest.mark.dont_own_root_manager
+def test_passing_root_server_address_to_process():
     def client_func():
         pass
 
-    client = ProcessTest(target=client_func, exception_server_address=exception_server_address)
+    client = ProcessTest(target=client_func, root_server_address=root_server_address)
     client.start()
     client.join()
 
 
-@pytest.mark.dont_own_exception_handler
+@pytest.mark.dont_own_root_manager
 def test_authentication():
     authkey = os.urandom(128)
 
@@ -83,7 +83,7 @@ def test_authentication():
         client.join()
 
 
-@pytest.mark.dont_own_exception_handler
+@pytest.mark.dont_own_root_manager
 def test_authentication_from_address():
     address = ("127.0.0.1", 7777, os.urandom(128))
 
@@ -98,7 +98,7 @@ def test_authentication_from_address():
         client.join()
 
 
-@pytest.mark.dont_own_exception_handler
+@pytest.mark.dont_own_root_manager
 def test_failed_authentication():
     def client_func():
         manager = SharedMemoryManager(authkey=os.urandom(128))
@@ -112,7 +112,7 @@ def test_failed_authentication():
         client.join()
 
 
-@pytest.mark.dont_own_exception_handler
+@pytest.mark.dont_own_root_manager
 def test_port_conflict():
     address = ("127.0.0.1", 7007)
     with SharedMemoryManager(address=address) as manager1:
@@ -121,7 +121,7 @@ def test_port_conflict():
                 pass
 
 
-@pytest.mark.dont_own_exception_handler
+@pytest.mark.dont_own_root_manager
 def test_auto_port():
     address = ("127.0.0.1", 0)
 

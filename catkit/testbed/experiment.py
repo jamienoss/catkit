@@ -6,7 +6,7 @@ import threading
 import uuid
 
 from catkit import datalogging
-from catkit.multiprocessing import DEFAULT_TIMEOUT, EXCEPTION_SERVER_ADDRESS, Process, SharedMemoryManager
+from catkit.multiprocessing import DEFAULT_TIMEOUT, ROOT_SERVER_ADDRESS, Process, SharedMemoryManager
 
 
 STOP_EVENT = "hicat_stop_event"
@@ -56,7 +56,7 @@ class Testbed:
     """ Class for owning testbed infrastructure such as any shared memory servers and running safety checks. """
 
     def __init__(self, safety_tests, output_path=None, suffix=None,
-                 safety_check_interval=60, exception_server_address=None):
+                 safety_check_interval=60, root_server_address=None):
         """
         Parameters
         ----------
@@ -79,10 +79,10 @@ class Testbed:
 
         self.safety_check_interval = safety_check_interval
 
-        # NOTE: exception_server_address may not be final until it is started.
-        if exception_server_address is None:
-            exception_server_address = EXCEPTION_SERVER_ADDRESS
-        self.exception_manager = SharedMemoryManager(address=exception_server_address, own=True)
+        # NOTE: root_server_address may not be final until it is started.
+        if root_server_address is None:
+            root_server_address = ROOT_SERVER_ADDRESS
+        self.root_manager = SharedMemoryManager(address=root_server_address, own=True)
 
         self.stop_event = None
         self.safety_event = None
@@ -107,7 +107,7 @@ class Testbed:
 
             # Start continuous monitoring.
             self.safety_process = Process(target=self.safety_monitor, name="Safety Test Monitor", args=(self.barrier,),
-                                          exception_server_address=self.exception_manager.address)
+                                          root_server_address=self.root_manager.address)
             self.safety_process.start()  # NOTE: This will need to be joined.
             # print(f" ### Safety tests monitored on PID: {self.safety_process.pid}")
             self.log.info(f"Continuously monitoring safety tests... (on PID: {self.safety_process.pid})")
@@ -138,10 +138,10 @@ class Testbed:
             Override this to start and context manage any and all other servers.
         """
         # Start server to catch and manage exceptions from parallel processes.
-        self.exception_manager.start()  # NOTE: This is joined in self._teardown().
-        self.stop_event = self.exception_manager.get_event(STOP_EVENT)
-        self.safety_event = self.exception_manager.get_event(SAFETY_EVENT)
-        self.barrier = self.exception_manager.get_barrier(SAFETY_BARRIER, parties=2)
+        self.root_manager.start()  # NOTE: This is joined in self._teardown().
+        self.stop_event = self.root_manager.get_event(STOP_EVENT)
+        self.safety_event = self.root_manager.get_event(SAFETY_EVENT)
+        self.barrier = self.root_manager.get_barrier(SAFETY_BARRIER, parties=2)
 
     def check_safety(self, *args, **kwargs):
         self.log.info("Running safety tests...")
@@ -189,8 +189,8 @@ class Testbed:
             # Shutdown the exception handler manager.
             # NOTE: self.stop_event and self.safety_event are local to the exception manager server process and
             # will not be accessible post shutdown.
-            if self.exception_manager is not None:
-                self.exception_manager.shutdown()
+            if self.root_manager is not None:
+                self.root_manager.shutdown()
 
     def init_path(self):
         """ Set up output. """
@@ -214,7 +214,7 @@ class Experiment:
     data_log = datalogging.get_logger(__name__)
 
     def __init__(self, output_path=None, suffix=None, stop_all_on_exception=True, run_forever=False,
-                 disable_shared_memory=False, exception_server_address=None):
+                 disable_shared_memory=False, root_server_address=None):
         """ Initialize attributes common to all Experiments.
         All child classes should implement their own __init__ and call this via super()
 
@@ -242,10 +242,10 @@ class Experiment:
         self.run_forever = run_forever
         self.disable_shared_memory = disable_shared_memory
 
-        # NOTE: exception_server_address may not be final until it is started.
-        if exception_server_address is None:
-            exception_server_address = EXCEPTION_SERVER_ADDRESS
-        self.exception_manager = SharedMemoryManager(address=exception_server_address, own=False)
+        # NOTE: root_server_address may not be final until it is started.
+        if root_server_address is None:
+            root_server_address = ROOT_SERVER_ADDRESS
+        self.root_manager = SharedMemoryManager(address=root_server_address, own=False)
 
         self.experiment_process = None
         self.stop_event = None
@@ -269,10 +269,10 @@ class Experiment:
             It works like multiprocessing.Process.start(), a join() is thus required.
         """
         # Check that we can connect from the parent process.
-        print("######", self.exception_manager.address)
-        self.exception_manager.connect()  # Needs to have already been started.
-        self.stop_event = self.exception_manager.get_event(STOP_EVENT)
-        self.safety_event = self.exception_manager.get_event(SAFETY_EVENT)
+        print("######", self.root_manager.address)
+        self.root_manager.connect()  # Needs to have already been started.
+        self.stop_event = self.root_manager.get_event(STOP_EVENT)
+        self.safety_event = self.root_manager.get_event(SAFETY_EVENT)
 
         try:
             if self.disable_shared_memory:
@@ -281,10 +281,10 @@ class Experiment:
             else:
                 # Start the process to run the experiment.
                 self.log.info("Creating separate process to run experiment...")
-                exception_server_address = self.exception_manager.address
+                root_server_address = self.root_manager.address
                 self.experiment_process = Process(target=self.run_experiment, name=self.name,
-                                                  args=(exception_server_address,),
-                                                  exception_server_address=exception_server_address)
+                                                  args=(root_server_address,),
+                                                  root_server_address=root_server_address)
                 self.experiment_process.start()
                 # print(f" ### Child experiment process on PID: {self.experiment_process.pid}")
                 self.log.info(f"{self.name} process started on PID: {self.experiment_process.pid}")
@@ -320,17 +320,17 @@ class Experiment:
             # NOTE: This won't interrupt time.sleep(). See https://docs.python.org/3/library/time.html#time.sleep
             _thread.interrupt_main()
 
-    def run_experiment(self, exception_server_address):
+    def run_experiment(self, root_server_address):
         """ Code executed on the child process. """
         self.init_log()
         data_log_writer = None
 
         if not self.disable_shared_memory:
             # Check that we can connect from the child process.
-            self.exception_manager = SharedMemoryManager(address=exception_server_address, own=False)
-            self.exception_manager.connect()  # Needs to have already been started.
-            self.stop_event = self.exception_manager.get_event(STOP_EVENT)
-            self.safety_event = self.exception_manager.get_event(SAFETY_EVENT)
+            self.root_manager = SharedMemoryManager(address=root_server_address, own=False)
+            self.root_manager.connect()  # Needs to have already been started.
+            self.stop_event = self.root_manager.get_event(STOP_EVENT)
+            self.safety_event = self.root_manager.get_event(SAFETY_EVENT)
 
         self._event_monitor_barrier = threading.Barrier(parties=2, timeout=DEFAULT_TIMEOUT)
         self._kill_event_monitor_event = threading.Event()
