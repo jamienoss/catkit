@@ -87,6 +87,7 @@ class Testbed:
         self.stop_event = None
         self.safety_event = None
         self.barrier = None
+        self.address_book = None
 
         self.safety_process = None
         self.safety_tests = []
@@ -139,6 +140,7 @@ class Testbed:
         """
         # Start server to catch and manage exceptions from parallel processes.
         self.root_manager.start()  # NOTE: This is joined in self._teardown().
+        self.address_book = self.root_manager.AddressBook()  # This is a shared singleton dict.
         self.stop_event = self.root_manager.get_event(STOP_EVENT)
         self.safety_event = self.root_manager.get_event(SAFETY_EVENT)
         self.barrier = self.root_manager.get_barrier(SAFETY_BARRIER, parties=2)
@@ -235,6 +237,9 @@ class Experiment:
         disable_shared_memory : bool, optional
             Disable shared memory. When True some peripheral shared memory will still exist and the main
             experiment will run on the parent process. When False, the main experiment is run on a child process.
+        root_server_address: tuple
+            A tuple of either the following `(IP, port)` or `(IP, port, authkey)` to start the root shared server on.
+            NOTE: This address must be final, i.e., the port must be non-zero and the IP not an empty string.
         """
         self.output_path = output_path
         self.suffix = suffix
@@ -269,7 +274,6 @@ class Experiment:
             It works like multiprocessing.Process.start(), a join() is thus required.
         """
         # Check that we can connect from the parent process.
-        print("######", self.root_manager.address)
         self.root_manager.connect()  # Needs to have already been started.
         self.stop_event = self.root_manager.get_event(STOP_EVENT)
         self.safety_event = self.root_manager.get_event(SAFETY_EVENT)

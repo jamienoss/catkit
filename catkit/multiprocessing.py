@@ -635,6 +635,7 @@ class SharedMemoryManager(SyncManager):
         self.own = own  # Accessed by __del__ so hoist to here.
 
         if address is None:
+            assert False
             address = self.ADDRESS if hasattr(self, "ADDRESS") else DEFAULT_SHARED_MEMORY_SERVER_ADDRESS
 
         # For the simplicity of passing around args, by design, we allow the authkey to belong to the address tuple.
@@ -829,6 +830,10 @@ class _ExceptionCache(_PseudoMutexedDictSingleton):
     instance = None
 
 
+class AddressBook(_PseudoMutexedDictSingleton):
+    instance = None
+
+
 # Registered types intended for internal use only.
 SharedMemoryManager.register("_LockCache", callable=_LockCache, proxytype=_LockCache.Proxy, create_method=True)
 SharedMemoryManager.register("_BarrierCache", callable=_BarrierCache, proxytype=_BarrierCache.Proxy, create_method=True)
@@ -837,6 +842,7 @@ SharedMemoryManager.register("_ExceptionCache", callable=_ExceptionCache, proxyt
 SharedMemoryManager.register("_getpid", callable=os.getpid, proxytype=ValueProxy)
 
 # Register shared types.
+SharedMemoryManager.register("AddressBook", callable=AddressBook, proxytype=AddressBook.Proxy, create_method=True)
 SharedMemoryManager.register("Mutex", callable=Mutex, proxytype=Mutex.Proxy, create_method=True)
 SharedMemoryManager.register("MutexedNamespace", callable=MutexedNamespace, proxytype=MutexedNamespace.Proxy, create_method=True)
 
